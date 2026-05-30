@@ -13,6 +13,9 @@
       <span v-for="n in 6" :key="n" class="ball" :style="ballStyle(n)">⚽</span>
     </div>
 
+    <!-- 烟花画布 -->
+    <canvas ref="fireworksCanvas" class="fireworks-canvas"></canvas>
+
     <!-- 左上角AI预测标签 -->
     <div class="top-left-tag">🤖 AI预测</div>
 
@@ -108,7 +111,7 @@
 </template>
 
 <script>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 
 export default {
   name: 'App',
@@ -118,6 +121,153 @@ export default {
     const showResult = ref(false)
     const progress = ref(0)
     const currentStage = ref(-1)
+    const fireworksCanvas = ref(null)
+
+    // --- 烟花系统 ---
+    let ctx = null
+    let animFrameId = null
+    let fireworks = []
+    let particles = []
+
+    class Firework {
+      constructor(w, h) {
+        this.x = w * (0.2 + Math.random() * 0.6)
+        this.y = h
+        this.targetY = h * (0.1 + Math.random() * 0.35)
+        this.speed = 4 + Math.random() * 3
+        this.hue = Math.floor(Math.random() * 360)
+        this.alive = true
+        this.trail = []
+      }
+      update() {
+        this.trail.push({ x: this.x, y: this.y })
+        if (this.trail.length > 6) this.trail.shift()
+        this.y -= this.speed
+        if (this.y <= this.targetY) {
+          this.alive = false
+          this.explode()
+        }
+      }
+      draw(c) {
+        for (let i = 0; i < this.trail.length; i++) {
+          const a = i / this.trail.length
+          c.beginPath()
+          c.arc(this.trail[i].x, this.trail[i].y, 2, 0, Math.PI * 2)
+          c.fillStyle = `hsla(${this.hue}, 100%, 70%, ${a * 0.5})`
+          c.fill()
+        }
+        c.beginPath()
+        c.arc(this.x, this.y, 3, 0, Math.PI * 2)
+        c.fillStyle = `hsl(${this.hue}, 100%, 80%)`
+        c.fill()
+      }
+      explode() {
+        const count = 60 + Math.floor(Math.random() * 40)
+        for (let i = 0; i < count; i++) {
+          const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5
+          const speed = 2 + Math.random() * 4
+          particles.push(new Particle(this.x, this.y, angle, speed, this.hue))
+        }
+      }
+    }
+
+    class Particle {
+      constructor(x, y, angle, speed, hue) {
+        this.x = x
+        this.y = y
+        this.vx = Math.cos(angle) * speed
+        this.vy = Math.sin(angle) * speed
+        this.hue = hue + Math.floor(Math.random() * 30 - 15)
+        this.alpha = 1
+        this.decay = 0.015 + Math.random() * 0.02
+        this.size = 2 + Math.random() * 2
+        this.gravity = 0.04
+      }
+      update() {
+        this.vx *= 0.98
+        this.vy *= 0.98
+        this.vy += this.gravity
+        this.x += this.vx
+        this.y += this.vy
+        this.alpha -= this.decay
+      }
+      draw(c) {
+        c.beginPath()
+        c.arc(this.x, this.y, this.size, 0, Math.PI * 2)
+        c.fillStyle = `hsla(${this.hue}, 100%, 65%, ${this.alpha})`
+        c.fill()
+      }
+    }
+
+    let launchTimer = null
+
+    function startFireworks() {
+      const canvas = fireworksCanvas.value
+      if (!canvas) return
+      canvas.width = window.innerWidth
+      canvas.height = window.innerHeight
+      ctx = canvas.getContext('2d')
+      fireworks = []
+      particles = []
+
+      let launchCount = 0
+      const maxLaunches = 15
+
+      function launchOne() {
+        if (launchCount < maxLaunches) {
+          fireworks.push(new Firework(canvas.width, canvas.height))
+          launchCount++
+          launchTimer = setTimeout(launchOne, 300 + Math.random() * 500)
+        }
+      }
+      launchOne()
+
+      function animate() {
+        ctx.globalCompositeOperation = 'source-over'
+        ctx.fillStyle = 'rgba(10, 22, 40, 0.4)'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.globalCompositeOperation = 'lighter'
+
+        for (let i = fireworks.length - 1; i >= 0; i--) {
+          fireworks[i].update()
+          fireworks[i].draw(ctx)
+          if (!fireworks[i].alive) fireworks.splice(i, 1)
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+          particles[i].update()
+          particles[i].draw(ctx)
+          if (particles[i].alpha <= 0) particles.splice(i, 1)
+        }
+
+        animFrameId = requestAnimationFrame(animate)
+      }
+      animate()
+    }
+
+    function stopFireworks() {
+      if (animFrameId) cancelAnimationFrame(animFrameId)
+      if (launchTimer) clearTimeout(launchTimer)
+      animFrameId = null
+      launchTimer = null
+      fireworks = []
+      particles = []
+      const canvas = fireworksCanvas.value
+      if (canvas) {
+        const c = canvas.getContext('2d')
+        c.clearRect(0, 0, canvas.width, canvas.height)
+      }
+    }
+
+    watch(showResult, (val) => {
+      if (val) {
+        nextTick(() => startFireworks())
+      } else {
+        stopFireworks()
+      }
+    })
+
+    onUnmounted(() => stopFireworks())
 
     const stages = [
       '正在录入并分析48支球队信息 ...',
@@ -196,6 +346,7 @@ export default {
       currentStageText,
       startPrediction,
       ballStyle,
+      fireworksCanvas,
     }
   }
 }
@@ -213,6 +364,14 @@ body {
   font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
   overflow: hidden;
   background: #0a1628;
+}
+
+/* Fireworks Canvas */
+.fireworks-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
 }
 
 /* Main App Container */
